@@ -42,6 +42,15 @@ ruff clean, mypy clean (26 source files).
 5. **Aging environment note**: ruff/mypy are installed but not on PATH on this
    Windows machine — always use the `python -m ruff` / `python -m mypy` forms
    (also updated in AGENTS Key Commands).
+6. **CI workflow added**: `.github/workflows/ci.yml` (verification-only, no
+   harvesting): qa (offline pytest + ruff + mypy + CLI smoke) → integration
+   (opt-in `pytest -m integration`) → proxy gate (`python main.py save` — 0
+   Indonesian anonymous winners = red) → target gate
+   (`scripts/putusan3_access.py --expect-text direktori` through the pool;
+   fails on HTTP <200 challenge pages). PRs treat live jobs as soft
+   (`continue-on-error`), pushes/manual dispatches are hard gates
+   (`workflow_dispatch` input `verify_network`). Pool + access evidence are
+   3-day artifacts. README gained the CI badge.
 
 ## QA pass #3 'finishing' (2026-10-28)
 

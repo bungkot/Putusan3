@@ -1,5 +1,7 @@
 # Indonesian Proxy Toolkit & Supreme Court Data Harvester
 
+[![CI](https://github.com/bungkot/Putusan3/actions/workflows/ci.yml/badge.svg)](https://github.com/bungkot/Putusan3/actions/workflows/ci.yml)
+
 > ⚠️ **DISCLAIMER — EDUCATION & LEARNING ONLY**
 >
 > This project was built **strictly for learning, research, and educational
@@ -341,6 +343,17 @@ pytest tests/test_putusan3_package.py  # package layers: domain/infra/CLI/use-ca
 ruff check .
 mypy putusan3
 ```
+
+A verification-only CI lives in `.github/workflows/ci.yml` (badge above): the
+`qa` job runs the offline suite + ruff + mypy on every push/PR; on demand it
+also proves the **proxy gate** (a fresh pool where every line is an Indonesian
+egress, anonymous, non-transparent proxy) and the **target gate** (real
+Chromium entry into `putusan3.mahkamahagung.go.id/direktori` without a
+Cloudflare challenge). It never harvests anything — only the diagnostic
+screenshot/JSON are kept as artifacts. Trigger the live jobs via manual
+`workflow_dispatch` (toggle "verify_network"), and note that on PRs the live
+jobs are soft (`continue-on-error`) because free-proxy flakiness must not
+block reviews, while pushes/dispatches are hard gates.
 
 The default test run (100 tests) excludes the 8 `integration`-marked tests; use
 `pytest tests/ -m integration -q` when live-network checks (Chromium launch,

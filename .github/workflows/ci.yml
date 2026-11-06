@@ -1,0 +1,198 @@
+name: CI
+
+# ---------------------------------------------------------------------------
+# Putusan3 CI — verification-only pipeline.
+#
+# NEVER harvests anything: no listing pages, no detail HTML, no CSV.
+# What it verifies, in order:
+#   1. qa          — static health: offline pytest + ruff + mypy + CLI smoke.
+#   2. integration — the opt-in live tests (proxy sources, httpbin validation,
+#                    Chromium launch). Reads only proxy lists; not the target.
+#   3. verify-proxies — builds a FRESH pool and proves every proxy passes the
+#                    Indonesian gate (egress GeoIP = ID, anonymous, not
+#                    transparent) via `python main.py save`.
+#   4. verify-target — browses https://putusan3.mahkamahagung.go.id/direktori
+#                    through the pool with the proven Chrome-UA stealth setup
+#                    and fails unless a real page (not a Cloudflare challenge)
+#                    renders. Proof artifacts: screenshot + JSON record.
+# ---------------------------------------------------------------------------
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      verify_network:
+        description: "Also run the live network verification jobs (proxy + target access)"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  # Tighter, CI-friendly validation knobs (values are proven-by-local-runs):
+  MAX_CONCURRENT: "4"            # parallel browser contexts during validation
+  MAX_PROXIES_TO_TEST: "120"     # candidates validated per refresh batch
+  VALIDATION_TIMEOUT: "12000"    # ms per proxy connectivity/anonymity test
+  SOURCE_FETCH_TIMEOUT: "15"     # seconds to fetch a proxy-source LIST
+  USE_GEOIP_FILTER: "true"       # Indonesian egress gate (the point of job 3)
+  VALIDATION_TEST_URL: "http://httpbin.org/get"  # /get echoes origin IP+headers; http:// (free proxies are http-only)
+
+jobs:
+  # -------------------------------------------------------------------------
+  # 1. Static QA — always green-path, no network use at all.
+  # -------------------------------------------------------------------------
+  qa:
+    name: Static QA (pytest offline + ruff + mypy + CLI smoke)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Lint (ruff)
+        run: python -m ruff check .
+      - name: Type check (mypy)
+        run: python -m mypy putusan3
+      - name: Offline test suite (default; integration excluded)
+        run: python -m pytest tests/ -q
+      - name: CLI doors smoke (--help for every entry point)
+        run: |
+          python -m putusan3 --help
+          python -m putusan3 pages --help
+          python -m putusan3 conduct --help
+          python -m putusan3 harvest --help
+          python scripts/putusan3_conductor.py --help
+          python scripts/putusan3_access.py --version
+
+  # -------------------------------------------------------------------------
+  # Helper anchors for the live jobs (kept as YAML comments — GHA has no
+  # anchors usable in `needs`, so the two booleans are repeated explicitly):
+  #   run on: push / pull_request (soft) / workflow_dispatch(gated by input)
+  # -------------------------------------------------------------------------
+  # run-condition: github.event_name != 'workflow_dispatch' || inputs.verify_network
+  # soft-failure:  github.event_name == 'pull_request'   (noisy free proxies must
+  #                not block PRs; pushes/dispatches are hard gates)
+
+  # -------------------------------------------------------------------------
+  # 2. Live integration tests — proxy source lists + httpbin + Chromium launch.
+  #    Reads proxy lists only; never touches putusan3.mahkamahagung.go.id.
+  # -------------------------------------------------------------------------
+  integration-tests:
+    name: Live integration tests (no harvesting)
+    needs: qa
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_network }}
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Install Chromium (with system deps)
+        run: playwright install --with-deps chromium
+      - name: Integration suite (opt-in markers only)
+        run: python -m pytest tests/ -m integration -q
+
+  # -------------------------------------------------------------------------
+  # 3. Proxy gate — fresh pool; EVERY line in it must be:
+  #    reachable + anonymous + not transparent + egress country = ID.
+  #    Implemented by the screen manager itself (`python main.py save`):
+  #    it fetches the 4 configured proxy-source lists, validates the batch,
+  #    geo-labels egress via ip-api.com, and exits 1 when NO Indonesian
+  #    anonymous proxy is found — which turns this step into the gate.
+  # -------------------------------------------------------------------------
+  verify-proxies-indonesia:
+    name: Proxy gate — Indonesian egress (no harvesting)
+    needs: qa
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_network }}
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Fetch sources + validate (connectivity/anonymity/transparency/ID-egress GeoIP) → pool snapshot
+        run: python main.py save data/pools/proxy_pool.txt
+      - name: Pool stats (per-proxy health printout)
+        run: python main.py list-proxies
+      - name: Upload pool snapshot
+        uses: actions/upload-artifact@v4
+        with:
+          name: proxy-pool
+          path: data/pools/proxy_pool.txt
+          if-no-files-found: error
+          retention-days: 3
+
+  # -------------------------------------------------------------------------
+  # 4. Target gate — enter https://putusan3.mahkamahagung.go.id/direktori
+  #    through the (Indonesian) pool WITHOUT a Cloudflare challenge.
+  #    `scripts/putusan3_access.py` is self-contained (Chromium + Chrome UA +
+  #    id-ID/Jakarta stealth) and enforces three things per attempt:
+  #      a. real indefinite HTTP 200 (>= min body size — kills stub pages),
+  #      b. the expected page text "direktori" is actually rendered
+  #         (kills the "Just a moment…" / "Attention Required" challenge pages),
+  #      c. first success writes the full-page screenshot as evidence.
+  #    Exit 0 = access verified. NO page content is downloaded beyond the
+  #    diagnostic screenshot/JSON.
+  # -------------------------------------------------------------------------
+  verify-target-access:
+    name: Target gate — putusan3 access, no Cloudflare challenge (no harvesting)
+    needs: verify-proxies-indonesia
+    if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_network }}
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Install Chromium (with system deps)
+        run: playwright install --with-deps chromium
+      - name: Download the fresh Indonesian pool
+        uses: actions/download-artifact@v4
+        with:
+          name: proxy-pool
+          path: data/pools
+      - name: Access probe (Chromium via pool, expects the direktori page, up to 10 candidates)
+        run: >-
+          python scripts/putusan3_access.py
+          --pool data/pools/proxy_pool.txt
+          --attempts 10
+          --expect-text "direktori"
+          --json diagnostics/access_result.json
+          --screenshot diagnostics/ci_access.png
+      - name: Upload access evidence
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: access-evidence
+          path: |
+            diagnostics/access_result.json
+            diagnostics/ci_access.png
+          if-no-files-found: ignore
+          retention-days: 3

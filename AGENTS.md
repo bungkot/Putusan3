@@ -49,6 +49,7 @@ python -m putusan3 conduct --year 2026
 | Run legacy generic scraper | `python main.py` |
 | Check conductor progress | `(Get-ChildItem data/harvest/2026/pages -Filter list_*.html).Count` + `Get-Content logs/conductor_run.log -Tail 5` |
 | Tests | `python -m pytest tests/ -q` |
+| CI | `.github/workflows/ci.yml` — qa (offline) + integration + proxy gate (ID egress) + target gate (putusan3, no challenge); verification-only, never harvests |
 | Lint | `python -m ruff check .` |
 | Type check | `python -m mypy putusan3` |
 
