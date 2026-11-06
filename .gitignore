@@ -1,0 +1,59 @@
+# ============================================================
+# Putusan3 Harvest — .gitignore untuk GitHub
+# Kode & config saja yang di-commit; semua artefak run,
+# data hasil scrape, dan backup tinggal di lokal.
+# ============================================================
+
+# --- Hasil run: data scrape, pool, log, diagnostik, backup kode ---
+data/
+logs/
+diagnostics/
+backup/
+
+# --- Pool snapshot yang tak sengaja ditulis di root ---
+/proxy_pool*.txt
+
+# --- Hasil ekspor opsional di root (RESULTS_PATH) ---
+/results.json
+/test_results*.json
+
+# --- File sementara tulis-atomik (.part dari safe_write) ---
+*.part
+
+# --- Python caches & build ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+build/
+dist/
+*.egg-info/
+*.whl
+
+# --- Test coverage ---
+.coverage
+.coverage.*
+htmlcov/
+
+# --- Virtual environment ---
+.venv/
+venv/
+env/
+
+# --- Environment & secrets ---
+.env
+.env.*
+!.env.example
+
+# --- IDE / editor ---
+.vscode/
+.idea/
+*.swp
+*~
+
+# --- OS junk ---
+.DS_Store
+Thumbs.db
+desktop.ini

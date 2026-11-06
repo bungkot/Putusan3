@@ -1,0 +1,151 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "name": "playwright-indonesian-proxy-scraper",
+  "version": "3.0.0",
+  "description": "Python Playwright scraper with rotating Indonesian proxies from free sources (live-verified against Cloudflare-protected putusan3.mahkamahagung.go.id)",
+  "instructions": [
+    "AGENTS.md"
+  ],
+  "skills": [
+    {
+      "id": "python-playwright",
+      "name": "Python Playwright Expert",
+      "description": "Best practices for Playwright Python: browser contexts, proxy configuration, stealth, error handling, concurrent scraping",
+      "files": [
+        "putusan3/infrastructure/playwright_engine.py",
+        "putusan3/infrastructure/visitor.py"
+      ]
+    },
+    {
+      "id": "proxy-management",
+      "name": "Proxy Rotation & Validation",
+      "description": "Fetching, validating, and rotating free proxies with health tracking, geo-filtering (Indonesia), and failure recovery",
+      "files": [
+        "putusan3/infrastructure/sources.py",
+        "putusan3/infrastructure/validator.py",
+        "putusan3/infrastructure/rotator.py"
+      ]
+    },
+    {
+      "id": "async-python",
+      "name": "Async Python Patterns",
+      "description": "asyncio, aiohttp, concurrent browser contexts, semaphore-based concurrency control, graceful shutdown",
+      "files": [
+        "putusan3/application/async_tasks.py",
+        "putusan3/infrastructure/playwright_engine.py"
+      ]
+    },
+    {
+      "id": "web-scraping-ethics",
+      "name": "Ethical Scraping Practices",
+      "description": "Rate limiting, robots.txt compliance, randomized delays, user-agent rotation, request header variation",
+      "files": [
+        "putusan3/config.py",
+        "putusan3/infrastructure/visitor.py"
+      ]
+    }
+  ],
+  "agents": {
+    "explorer": {
+      "model": "opencode/nemotron-3-ultra-free",
+      "description": "Fast codebase exploration: find files, search patterns, understand structure",
+      "tools": ["glob", "grep", "read", "edit"]
+    },
+    "implementer": {
+      "model": "opencode/nemotron-3-ultra-free",
+      "description": "Implements features: proxy fetching, validation, rotation, Playwright visitor logic",
+      "tools": ["write", "edit", "shell", "read"],
+      "instructions": [
+        "Follow AGENTS.md architecture",
+        "Use async/await throughout",
+        "Add type hints and docstrings",
+        "Handle errors gracefully with rotation"
+      ]
+    },
+    "tester": {
+      "model": "opencode/nemotron-3-ultra-free",
+      "description": "Writes and runs tests: unit tests for proxy logic, integration tests for scraper",
+      "tools": ["write", "edit", "shell", "read"],
+      "instructions": [
+        "Test proxy validator with mock responses",
+        "Test rotator health tracking",
+        "Test scraper with real proxy (integration)",
+        "Use pytest with asyncio support"
+      ]
+    },
+    "debugger": {
+      "model": "opencode/nemotron-3-ultra-free",
+      "description": "Diagnoses issues: proxy failures, Playwright timeouts, SSL errors, IP leakage",
+      "tools": ["shell", "read", "edit", "grep"],
+      "instructions": [
+        "Run headed browser for visual debugging",
+        "Log proxy IP via httpbin.org/ip",
+        "Check Playwright traces on failure",
+        "Verify Indonesian geo-location"
+      ]
+    }
+  },
+  "tools": {
+    "shell": {
+      "allow": [
+        "pip install *",
+        "playwright install *",
+        "python *",
+        "pytest *",
+        "ruff *",
+        "mypy *"
+      ]
+    }
+  },
+  "environment": {
+    "PYTHONPATH": ".",
+    "PLAYWRIGHT_BROWSERS_PATH": "~/.cache/ms-playwright"
+  },
+  "tasks": {
+    "setup": {
+      "description": "Install dependencies and Playwright Chromium",
+      "command": "pip install -r requirements.txt && playwright install chromium",
+      "agent": "implementer"
+    },
+    "save-pool": {
+      "description": "Fetch, validate, and snapshot the proxy pool to data/pools/proxy_pool.txt (slow, network)",
+      "command": "python main.py save data/pools/proxy_pool.txt",
+      "agent": "implementer"
+    },
+    "load-pool": {
+      "description": "Inspect the pool restored from data/pools/proxy_pool.txt (no network)",
+      "command": "python main.py load data/pools/proxy_pool.txt",
+      "agent": "tester"
+    },
+    "fast-test": {
+      "description": "Scrape using the saved pool snapshot — no network refresh (instant)",
+      "command": "PROXY_LOAD_PATH=data/pools/proxy_pool.txt RESULTS_PATH=results.json python main.py test-all",
+      "agent": "tester"
+    },
+    "dev": {
+      "description": "Run scraper in headed mode for debugging",
+      "command": "HEADLESS=false python main.py",
+      "agent": "debugger"
+    },
+    "test": {
+      "description": "Run all tests",
+      "command": "pytest tests/ -v",
+      "agent": "tester"
+    },
+    "lint": {
+      "description": "Lint and type check",
+      "command": "ruff check . && mypy putusan3",
+      "agent": "implementer"
+    },
+    "proxy-test": {
+      "description": "Test proxy fetching and validation",
+      "command": "python -m putusan3.infrastructure.validator",
+      "agent": "tester"
+    },
+    "state": {
+      "description": "Show the current project state snapshot (docs/STATE.md)",
+      "command": "cat docs/STATE.md",
+      "agent": "explorer"
+    }
+  }
+}

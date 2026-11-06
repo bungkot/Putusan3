@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "putusan3"
+version = "3.0.0"
+description = "Indonesian proxy rotator + putusan3.mahkamahagung.go.id harvester (Playwright, Cloudflare-aware)"
+requires-python = ">=3.10"
+dependencies = [
+    "playwright>=1.40.0",
+    "httpx>=0.28.0",
+    "beautifulsoup4>=4.12.0",
+    "lxml>=4.9.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "ruff>=0.11.0",
+    "mypy>=1.15.0",
+]
+
+[project.scripts]
+putusan3 = "putusan3.presentation.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["putusan3*"]
+
+[tool.setuptools.package-data]
+putusan3 = ["py.typed"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+asyncio_mode = "strict"
+testpaths = ["tests"]
+addopts = "-q -m 'not integration'"
+markers = [
+    "integration: requires live internet access or external proxy services",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = [".", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
+ignore = ["E501"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+check_untyped_defs = true
