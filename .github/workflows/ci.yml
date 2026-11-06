@@ -51,11 +51,11 @@ jobs:
   # -------------------------------------------------------------------------
   qa:
     name: Static QA (pytest offline + ruff + mypy + CLI smoke)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -94,11 +94,11 @@ jobs:
     needs: qa
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_network }}
     continue-on-error: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -122,11 +122,11 @@ jobs:
     needs: qa
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_network }}
     continue-on-error: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -137,7 +137,7 @@ jobs:
       - name: Pool stats (per-proxy health printout)
         run: python main.py list-proxies
       - name: Upload pool snapshot
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: proxy-pool
           path: data/pools/proxy_pool.txt
@@ -161,11 +161,11 @@ jobs:
     needs: verify-proxies-indonesia
     if: ${{ github.event_name != 'workflow_dispatch' || inputs.verify_network }}
     continue-on-error: ${{ github.event_name == 'pull_request' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
@@ -174,7 +174,7 @@ jobs:
       - name: Install Chromium (with system deps)
         run: playwright install --with-deps chromium
       - name: Download the fresh Indonesian pool
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: proxy-pool
           path: data/pools
@@ -187,7 +187,7 @@ jobs:
           --json diagnostics/access_result.json
           --screenshot diagnostics/ci_access.png
       - name: Upload access evidence
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         if: always()
         with:
           name: access-evidence
