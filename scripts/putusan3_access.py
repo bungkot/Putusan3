@@ -66,7 +66,7 @@ from playwright.async_api import (
     TimeoutError as PWTimeoutError,
 )
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 LOG = logging.getLogger("putusan3_access")
 
@@ -289,6 +289,14 @@ async def run(args: argparse.Namespace) -> int:
     if not proxies:
         return 1
     proxies = proxies[: args.attempts]
+
+    # CI runs from a fresh checkout: artifact directories (diagnostics/ ...)
+    # may not exist. Create them up front, otherwise the failure record
+    # cannot be written when EVERY attempt fails — exactly the case where
+    # the evidence matters most.
+    for artifact in (screenshot_path, html_path, json_path):
+        if artifact:
+            artifact.parent.mkdir(parents=True, exist_ok=True)
 
     # Hard per-attempt wall clock. Navigation/goto already carry their own
     # timeouts, but a wedged proxy can stall even non-navigation calls

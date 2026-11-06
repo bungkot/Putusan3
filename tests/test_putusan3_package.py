@@ -866,7 +866,7 @@ def test_access_probe_parser_watchdog_defaults():
     """
     import putusan3_access as access_probe  # noqa: PLC0415 (scripts/ on sys.path)
 
-    assert access_probe.__version__ == "1.1.0"
+    assert access_probe.__version__ == "1.1.1"
     args = access_probe.build_parser().parse_args(["--pool", "p.txt"])
     assert args.watchdog == 0          # auto: 2 x timeout + 18 s
     assert args.timeout == 55_000
