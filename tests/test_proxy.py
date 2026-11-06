@@ -33,6 +33,36 @@ class TestProxySources:
         assert len(sources) > 0
 
     @pytest.mark.asyncio
+    async def test_fetch_all_proxies_grouped_flags_country_sources(self, monkeypatch):
+        """Candidates from country-filtered (=ID) sources are prioritized."""
+        import putusan3.infrastructure.sources as proxy_sources
+
+        id_source = proxy_sources.ProxyscrapeSource(
+            "s-id", "https://api.proxyscrape.com/v2/?country=ID")
+        generic_source = proxy_sources.GitHubRawSource(
+            "s-any", "https://raw.githubusercontent.com/x/y/main/http.txt")
+
+        async def fake_fetch_id():
+            return ["103.10.0.1:8080", "103.10.0.2:8080"]
+
+        async def fake_fetch_generic():
+            return ["103.10.0.2:8080", "1.2.3.4:8080"]
+
+        monkeypatch.setattr(id_source, "fetch", fake_fetch_id)
+        monkeypatch.setattr(generic_source, "fetch", fake_fetch_generic)
+        monkeypatch.setattr(proxy_sources, "create_sources",
+                            lambda: [id_source, generic_source])
+
+        all_proxies, prioritized = await proxy_sources.fetch_all_proxies_grouped()
+
+        assert sorted(all_proxies) == [
+            "1.2.3.4:8080", "103.10.0.1:8080", "103.10.0.2:8080"]
+        # only the (=ID)-source candidates are prioritized (dedup across sources)
+        assert sorted(prioritized) == ["103.10.0.1:8080", "103.10.0.2:8080"]
+        # backwards-compatible wrapper still returns the merged list
+        assert sorted(await proxy_sources.fetch_all_proxies()) == sorted(all_proxies)
+
+    @pytest.mark.asyncio
     @pytest.mark.integration
     async def test_proxyscrape_source(self):
         """Test proxyscrape source."""
@@ -121,6 +151,42 @@ class TestProxyValidator:
         for r in results:
             assert hasattr(r, 'proxy')
             assert hasattr(r, 'is_working')
+
+    @pytest.mark.asyncio
+    async def test_validate_batch_prioritizes_country_candidates(self, monkeypatch):
+        """The validation budget is spent on country-filtered candidates first.
+
+        CI proxy-gate regression: 120 random candidates out of ~4k fetched —
+        the ~100 country=ID candidates were drowned out and the Indonesian
+        gate failed on luck. (Offline: single-check + GeoIP are stubbed.)
+        """
+        from proxy.validator import ProxyValidator
+
+        validator = ProxyValidator(max_proxies_to_test=3)
+
+        async def fake_single(proxy: str):
+            from proxy.validator import ProxyValidationResult
+            return ProxyValidationResult(proxy=proxy, is_working=True)
+
+        async def fake_real_ip() -> None:
+            return None
+
+        async def fake_lookup(_ips):  # short-circuit the ip-api batch call
+            return {}
+
+        monkeypatch.setattr(validator, "_validate_single", fake_single)
+        monkeypatch.setattr(validator, "_get_real_ip", fake_real_ip)
+        monkeypatch.setattr(validator, "_lookup_countries", fake_lookup)
+
+        generic = [f"203.0.0.{i}:80" for i in range(1, 21)]
+        country = ["198.51.100.7:8080", "198.51.100.8:8080", "198.51.100.9:8080"]
+        # prioritized must be a subset of the fetched pool (merged dedup list)
+        results = await validator.validate_batch(generic + country, prioritized=country)
+
+        tested = [r.proxy for r in results]
+        assert len(tested) == 3
+        # every country-prioritized candidate made it into the tested slice
+        assert set(country) <= set(tested)
 
 
 class TestProxyRotator:

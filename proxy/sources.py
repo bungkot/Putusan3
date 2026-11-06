@@ -8,5 +8,6 @@ from putusan3.infrastructure.sources import (  # noqa: F401
     ProxySource,
     create_sources,
     fetch_all_proxies,
+    fetch_all_proxies_grouped,
     normalize_proxy_line,
 )

@@ -14,6 +14,7 @@ import asyncio
 import logging
 import random
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 import httpx
@@ -84,19 +85,39 @@ class ProxyValidator:
         await self._apply_geo([result])
         return result
 
-    async def validate_batch(self, proxies: list[str]) -> list[ProxyValidationResult]:
-        """Validate multiple proxies concurrently, with batched GeoIP lookups."""
-        # Deterministic shuffle first: the raw list is source-ordered, so the
-        # first-N slice would otherwise only ever test the first source's
-        # candidates and never see the rest of the pool.
-        test_proxies = sorted(set(proxies))
+    async def validate_batch(
+        self,
+        proxies: list[str],
+        prioritized: Iterable[str] | None = None,
+    ) -> list[ProxyValidationResult]:
+        """Validate multiple proxies concurrently, with batched GeoIP lookups.
+
+        `prioritized`: candidates that consume validation budget FIRST —
+        the proxies from sources that already filter by country (ID).
+        The generic lists are ~40x larger than the country-filtered ones,
+        so an undifferentiated random slice would almost never include a
+        country-filtered candidate and the Indonesian gate would silently
+        depend on luck. Both tiers are re-shuffled per call, so candidates
+        keep rotating between runs.
+        """
+        unique = list(dict.fromkeys(proxies))
+        unique_set = set(unique)
+        # Country-filtered candidates first (drop any not in the fetched pool)
+        priority = [
+            proxy for proxy in dict.fromkeys(prioritized or []) if proxy in unique_set
+        ]
+        priority_set = set(priority)
+        rest = [proxy for proxy in unique if proxy not in priority_set]
         # Re-seed every call: a fixed seed would retest the exact same slice on
         # every run, so the rest of the deduplicated pool would never get a turn.
         rng = random.Random()
-        rng.shuffle(test_proxies)
-        test_proxies = test_proxies[: self.max_proxies_to_test]
+        rng.shuffle(priority)
+        rng.shuffle(rest)
+        test_proxies = (priority + rest)[: self.max_proxies_to_test]
         logger.info(
-            f"Validating {len(test_proxies)} proxies (max concurrent: {self.max_concurrent})..."
+            f"Validating {len(test_proxies)} proxies "
+            f"(max concurrent: {self.max_concurrent}, "
+            f"{len(priority)} country-prioritized)"
         )
 
         # One shared lookup of our real IP for transparency detection
@@ -331,11 +352,13 @@ class ProxyValidator:
 
 
 async def validate_proxies(
-    proxies: list[str], max_to_test: int | None = None
+    proxies: list[str],
+    max_to_test: int | None = None,
+    prioritized: Iterable[str] | None = None,
 ) -> list[ProxyValidationResult]:
     """Convenience function to validate a list of proxies."""
     validator = ProxyValidator(max_proxies_to_test=max_to_test or config.MAX_PROXIES_TO_TEST)
-    return await validator.validate_batch(proxies)
+    return await validator.validate_batch(proxies, prioritized=prioritized)
 
 
 def filter_working_proxies(results: list[ProxyValidationResult]) -> list[str]:
@@ -382,12 +405,13 @@ def get_best_proxies(
 
 if __name__ == "__main__":
     """Standalone check: fetch, validate, and print best proxies."""
-    from putusan3.infrastructure.sources import fetch_all_proxies
+    from putusan3.infrastructure.sources import fetch_all_proxies_grouped
 
     async def _main():
-        proxies = await fetch_all_proxies()
-        print(f"Fetched {len(proxies)} proxies")
-        results = await validate_proxies(proxies)
+        proxies, prioritized = await fetch_all_proxies_grouped()
+        print(f"Fetched {len(proxies)} proxies "
+              f"({len(prioritized)} country-filtered)")
+        results = await validate_proxies(proxies, prioritized=prioritized)
         best = get_best_proxies(results, count=20)
         print(f"Best proxies ({len(best)}):")
         for proxy in best:

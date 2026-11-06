@@ -250,10 +250,28 @@ def create_sources() -> list[ProxySource]:
     return sources
 
 
-async def fetch_all_proxies() -> list[str]:
+def source_is_country_filtered(source: ProxySource) -> bool:
+    """True when the source itself already filters to the target country.
+
+    Sources whose URL query includes `country=ID` (proxyscrape,
+    proxy-list.download) and classes that scrape ID-only pages
+    (free-proxy-list.net, geonode) return only country-filtered candidates.
+    The generic lists are ~40x larger, so merged random sampling would
+    almost never give the country-filtered candidates validation budget —
+    callers must prioritize them explicitly (see validator.validate_batch).
+    """
+    domain_sources = (FreeProxyListNetSource, GeoNodeSource)
+    return isinstance(source, domain_sources) or "country=ID" in source.url
+
+
+async def fetch_all_proxies_grouped() -> tuple[list[str], list[str]]:
     """
     Fetch proxies from all configured sources concurrently.
-    Returns deduplicated list of 'ip:port' strings.
+
+    Returns `(all_unique, country_prioritized)`: `country_prioritized`
+    holds the deduplicated candidates that come from sources which
+    already filter by country (=ID). Callers should give them validation
+    priority — see `ProxyValidator.validate_batch(prioritized=...)`.
     """
     sources = create_sources()
     logger.info(f"Fetching proxies from {len(sources)} sources...")
@@ -262,16 +280,31 @@ async def fetch_all_proxies() -> list[str]:
     tasks = [source.fetch() for source in sources]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Collect and deduplicate
+    # Collect and deduplicate, keeping country-filtered provenance
     all_proxies: set[str] = set()
+    country_prioritized: set[str] = set()
     for source, result in zip(sources, results, strict=False):
         if isinstance(result, Exception):
             logger.warning(f"Source {source.name} raised exception: {result}")
             continue
         if isinstance(result, list):
             all_proxies.update(result)
+            if source_is_country_filtered(source):
+                country_prioritized.update(result)
             logger.info(f"Source {source.name}: {len(result)} proxies")
 
     proxies_list = list(all_proxies)
-    logger.info(f"Total unique proxies fetched: {len(proxies_list)}")
-    return proxies_list
+    prioritized_list = list(country_prioritized)
+    logger.info(
+        f"Total unique proxies fetched: {len(proxies_list)} "
+        f"(incl. {len(prioritized_list)} country-filtered)"
+    )
+    return proxies_list, prioritized_list
+
+
+async def fetch_all_proxies() -> list[str]:
+    """
+    Fetch proxies from all configured sources concurrently.
+    Returns deduplicated list of 'ip:port' strings.
+    """
+    return (await fetch_all_proxies_grouped())[0]

@@ -97,16 +97,21 @@ class ProxyRotator:
         async with self._refresh_lock:
             logger.info("Refreshing proxy pool...")
 
-            # Fetch from sources
-            from putusan3.infrastructure.sources import fetch_all_proxies
-            raw_proxies = await fetch_all_proxies()
+            # Fetch from sources; country-filtered (=ID) candidates are
+            # validated first, before the much larger generic lists
+            from putusan3.infrastructure.sources import fetch_all_proxies_grouped
+            raw_proxies, country_prioritized = await fetch_all_proxies_grouped()
 
             if not raw_proxies:
                 logger.warning("No proxies fetched from sources")
                 return len(self._proxies)
 
             # Validate proxies (limit to avoid long waits)
-            results = await validate_proxies(raw_proxies, max_to_test=config.MAX_PROXIES_TO_TEST)
+            results = await validate_proxies(
+                raw_proxies,
+                max_to_test=config.MAX_PROXIES_TO_TEST,
+                prioritized=country_prioritized,
+            )
 
             # Get best proxies (Indonesian exit, anonymous, sorted by latency)
             best_proxies = get_best_proxies(
