@@ -831,5 +831,31 @@ def test_legacy_cli_load_command_offline(tmp_path, capsys, monkeypatch):
     assert "Loaded 2 proxies from" in out
 
 
+def test_initialize_pool_ops_do_not_launch_browser(tmp_path, monkeypatch):
+    """`need_visitor=False` (save / list-proxies) must never reach the browser.
+
+    CI regression: the verify-proxies job runs `main.py list-proxies` after
+    `save`; initialize unconditionally started the ProxyVisitor (Chromium
+    launch) even though the command only prints pool stats — fatal on
+    machines without browsers installed.
+    """
+    # Patch the config instance that legacy_cli actually reads (module
+    # reloads elsewhere in the suite can rebind putusan3.config.config).
+    pool_file = tmp_path / "pool.txt"
+    pool_file.write_text("8.8.8.8:8080\n", encoding="utf-8")
+    monkeypatch.setattr(legacy_cli.config, "PROXY_LOAD_PATH", str(pool_file))
+
+    def _boom(*_args, **_kwargs):
+        raise AssertionError("ProxyVisitor constructed — browser path reached")
+
+    monkeypatch.setattr(legacy_cli, "ProxyVisitor", _boom)
+
+    app = legacy_cli.ScraperApp()
+    assert asyncio.run(
+        app.initialize(refresh=False, allow_empty=False, need_visitor=False))
+    assert app.visitor is None
+    asyncio.run(app.cleanup())
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

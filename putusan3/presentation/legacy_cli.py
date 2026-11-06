@@ -44,8 +44,13 @@ class ScraperApp:
             raise RuntimeError("Proxy visitor has not been initialized.")
         return self.visitor
 
-    async def initialize(self, refresh: bool = True, allow_empty: bool = False) -> bool:
-        """Initialize proxy pool and browser.
+    async def initialize(
+        self,
+        refresh: bool = True,
+        allow_empty: bool = False,
+        need_visitor: bool = True,
+    ) -> bool:
+        """Initialize proxy pool and (optionally) the browser visitor.
 
         When `config.PROXY_LOAD_PATH` is set, the pool is (re)loaded from that
         text file regardless of `refresh` (so pool-ops commands like `save`
@@ -56,6 +61,11 @@ class ScraperApp:
 
         `allow_empty=True` skips the healthy-pool gate and browser startup
         (for pool-ops commands like `save`, which manage the pool themselves)
+
+        `need_visitor=False` skips browser startup for commands whose work is
+        purely pool-side (e.g. `list-proxies` just prints pool stats) — the
+        browser is only launched when actually required, so machines without
+        Chromium installed can still run pool-ops commands.
         """
         logger.info("Initializing Indonesian Proxy Scraper...")
 
@@ -90,10 +100,13 @@ class ScraperApp:
             logger.error("No healthy proxies available! Exiting.")
             return False
 
-        # Initialize visitor
-        rotator = self.pool.rotator
-        self.visitor = ProxyVisitor(rotator)
-        await self.active_visitor.start()
+        # Initialize visitor — only for commands that actually visit URLs.
+        # Pool-ops commands (save / list-proxies / load) work on the pool
+        # alone and must not require a browser to be installed.
+        if need_visitor:
+            rotator = self.pool.rotator
+            self.visitor = ProxyVisitor(rotator)
+            await self.active_visitor.start()
 
         return True
 
@@ -214,8 +227,14 @@ async def main() -> int:
 
     refresh = command != "save"
 
-    # Initialize
-    if not await app.initialize(refresh=refresh, allow_empty=(command == "save")):
+    # Initialize — the browser (visitor) is only started for commands that
+    # actually visit URLs; pool-ops commands must not require Chromium.
+    visitor_commands = {"test", "test-all", "continuous"}
+    if not await app.initialize(
+        refresh=refresh,
+        allow_empty=(command == "save"),
+        need_visitor=command in visitor_commands,
+    ):
         await app.cleanup()
         return 1
 
