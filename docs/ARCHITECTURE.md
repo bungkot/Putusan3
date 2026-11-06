@@ -1,53 +1,57 @@
 # Architecture
 
-Dokumen ini menjelaskan arsitektur sistem: layer, modul, alur data, dan trade-off. Ditulis ulang setelah restrukturisasi clean-architecture (2026-10-25) — logika kini hidup di satu tempat: paket `putusan3/`.
+This document describes the system architecture: layers, modules, data flow, and trade-offs. It was rewritten after the clean-architecture restructuring (2026-10-25) — the logic now lives in a single place: the `putusan3/` package.
 
 ## Layout: Ports & Adapters
 
 ```
 putusan3/
-├── config.py                              # kopi verbatim dari config lama (path-free)
-├── domain/                                           # PURE — tanpa I/O, tanpa playwright
-│   └── pagination_rules.py               # konstanta+regex situs, URL builders,
-│                                         # parser (parse_listing, parse_last_page,
-│                                         # is_challenge, is_valid_*), CHROME_UA dll
-├── infrastructure/                                   # ADAPTERS — efek samping dunia nyata
-│   ├── playwright_engine.py              # load_pool/load_courts_file (teks pool),
+├── config.py                              # copied verbatim from the old config (path-free)
+├── domain/                                           # PURE — no I/O, no playwright
+│   └── pagination_rules.py               # site constants+regex, URL builders,
+│                                         # parsers (parse_listing, parse_last_page,
+│                                         # is_challenge, is_valid_*), CHROME_UA etc.
+├── infrastructure/                                   # ADAPTERS — real-world side effects
+│   ├── playwright_engine.py              # load_pool/load_courts_file (pool text),
 │   │                                     # Fetcher (1 Chromium, 1 Context/proxy,
-│   │                                     # sticky-success, fast-skip mati, watchdog),
-│   │                                     # run_pool (worker pool terbatas)
+│   │                                     # sticky-success, fast-skip dead, watchdog),
+│   │                                     # run_pool (bounded worker pool)
 │   ├── page_store.py                     # safe_write/is_usable/manifest_log
-│   ├── sources.py                        # ← proxy/sources.py (5 sumber proxy gratis)
-│   ├── validator.py                      # ← proxy/validator.py (validasi+GeoIP batch)
-│   ├── rotator.py                        # ← proxy/rotator.py (round-robin+health)
-│   ├── visitor.py                        # ← scraper/visitor.py (ProxyVisitor umum)
-│   └── results_store.py                  # ← scraper/results.py (ekspor JSON/CSV)
-├── application/                                      # USE-CASES — orkestrasi layer di atas
-│   ├── ports.py                           # kontrak fetcher, storage, pool loader, process runner
-│   ├── async_tasks.py                     # bounded worker runner tanpa adapter
-│   ├── harvest_pages_service.py          # tahap 1: tahun → HTML tiap halaman listing
-│   ├── harvest_service.py                # Harvest: listing+detail+parse offline (penuh)
-│   └── conductor_service.py              # siklus [harvest → refresh-pool → merge → resume]
+│   ├── pool_loader.py                    # FilePoolLoader: read pool text for services
+│   ├── factories.py                      # PlaywrightFetcherFactory, SubprocessCommandRunner
+│   ├── sources.py                        # 4 default proxy lists (config.PROXY_SOURCES)
+│   │                                     # + GeoNode/FreeProxyListNet (usable when configured)
+│   ├── validator.py                      # validation + batch GeoIP
+│   ├── rotator.py                        # round-robin + health
+│   ├── visitor.py                        # generic ProxyVisitor
+│   └── results_store.py                  # JSON/CSV export
+├── application/                                      # USE-CASES — orchestration layer on top
+│   ├── ports.py                           # contracts for fetcher, storage, pool loader, process runner
+│   ├── async_tasks.py                     # bounded worker runner, no adapters
+│   ├── harvest_pages_service.py          # stage 1: year → HTML for each listing page
+│   ├── harvest_service.py                # Harvest: listing+detail+offline parse (full)
+│   └── conductor_service.py              # cycle [harvest → refresh-pool → merge → resume]
 └── presentation/                                     # CLI
     ├── cli.py                            # python -m putusan3 pages|conduct
-    ├── bootstrap.py                      # composition root: bind port ke adapter konkret
-    ├── harvest_cli.py                    # build_parser/run/main CLI harvest lama
-    └── legacy_cli.py                     # CLI proxy generik (launcher main.py)
+    ├── bootstrap.py                      # composition root: bind ports to concrete adapters
+    ├── harvest_cli.py                    # build_parser/run/main of the legacy harvest CLI
+    └── legacy_cli.py                     # generic proxy CLI (main.py launcher)
 ```
 
 ## Dependency inversion
 
-Use case di `application/` hanya bergantung pada `domain/` dan kontrak di
-`application/ports.py`. Ia tidak mengimpor Playwright, filesystem adapter,
-proxy source, atau subprocess implementation. `FetcherPort`, `FetcherFactoryPort`,
-`PageStorePort`, `PoolLoaderPort`, dan `CommandRunnerPort` memungkinkan use case
-diuji memakai fake/in-memory adapter tanpa jaringan, browser, atau proses nyata.
+Use cases in `application/` depend only on `domain/` and on the contracts in
+`application/ports.py`. They do not import Playwright, filesystem adapters,
+proxy sources, or subprocess implementations. `FetcherPort`, `FetcherFactoryPort`,
+`PageStorePort`, `PoolLoaderPort`, and `CommandRunnerPort` allow the use cases
+to be tested with fake/in-memory adapters without any network, browser, or real
+processes.
 
-Adapter konkret berada di `infrastructure/`: `PlaywrightFetcherFactory`,
-`LocalPageStore`, `FilePoolLoader`, dan `SubprocessCommandRunner`. Composition
-root di `presentation/bootstrap.py` mengikat adapter tersebut sebelum memanggil
-use case. `presentation/harvest_cli.py` adalah entry point kompatibilitas dan
-melakukan komposisi yang sama untuk alur harvest lama.
+The concrete adapters live in `infrastructure/`: `PlaywrightFetcherFactory`,
+`LocalPageStore`, `FilePoolLoader`, and `SubprocessCommandRunner`. The composition
+root in `presentation/bootstrap.py` binds those adapters before invoking the
+use cases. `presentation/harvest_cli.py` is a compatibility entry point and
+performs the same composition for the legacy harvest flow.
 
 ```text
 presentation/bootstrap ──> application use cases ──> application ports
@@ -56,92 +60,95 @@ presentation/bootstrap ──> application use cases ──> application ports
 domain <──────────────── application
 ```
 
-Dengan demikian arah source dependency tidak pernah mengarah dari application
-ke infrastructure. Tes `test_application_layer_does_not_import_infrastructure`
-menjaga batas ini dari regresi.
+Thus the source dependency direction never points from application to
+infrastructure. The test `test_application_layer_does_not_import_infrastructure`
+guards this boundary against regressions.
 
-### Kompatibilitas (shim pasca-restrukturisasi)
+### Compatibility (post-restructuring shims)
 
-Semua entry point lama tetap berjalan tanpa perubahan perilaku:
+All legacy entry points keep working without any behavior change:
 
-| Jalur lama | Sekarang |
+| Legacy path | Now |
 |------------|----------|
-| `main.py` (CLI scraper proxy) | launcher tipis ke `presentation/legacy_cli.py` |
-| `config.py`, `proxy/*`, `scraper/*` | shim re-export ke `putusan3.config` / `putusan3.infrastructure.*` |
-| `scraper/visitor.py` | alias `sys.modules` → `putusan3.infrastructure.visitor` (supaya `mock.patch("scraper.visitor.X")` tetap bekerja) |
-| `scripts/putusan3_harvest.py` | shim re-export penuh (test lama: `harvest.parse_*`, `harvest.Harvest`, `harvest.safe_write`) |
-| `scripts/putusan3_pages.py`, `scripts/putusan3_conductor.py` | launcher tipis → composition root di `putusan3.presentation.bootstrap` |
-| `python -m putusan3 pages ...` | entry point baru (presentation/cli.py) |
+| `main.py` (proxy scraper CLI) | thin launcher into `presentation/legacy_cli.py` |
+| `config.py`, `proxy/*`, `scraper/*` | re-export shims to `putusan3.config` / `putusan3.infrastructure.*` |
+| `scraper/visitor.py` | `sys.modules` alias → `putusan3.infrastructure.visitor` (so that `mock.patch("scraper.visitor.X")` keeps working) |
+| `scripts/putusan3_harvest.py` | full re-export shim (legacy tests: `harvest.parse_*`, `harvest.Harvest`, `harvest.safe_write`) |
+| `scripts/putusan3_pages.py`, `scripts/putusan3_conductor.py` | thin launchers → composition root in `putusan3.presentation.bootstrap` |
+| `python -m putusan3 pages ...` | new entry point (presentation/cli.py) |
 
-## Alur Tahap 1 (harvest halaman listing tahun)
+## Stage 1 Flow (harvesting a year's listing pages)
 
 ```
             ┌──────────────────────────────────────────────────────────────┐
             │ conductor (application/conductor_service.py)                 │
             │   loop: pages → refresh-pool (main.py save) → merge → resume │
             └──────────────┬───────────────────────────────────────────────┘
-                           │ subprocess terisolasi
+                           │ isolated subprocess
                            ▼
         ┌── harvest_pages_service (application) ────────────────────────┐
         │  PoolLoaderPort → FetcherFactoryPort → FetcherPort            │
         │  page 1 → pagination.json (last_page, capped_at_site_limit)   │
-        │  pages 2..last paralel (run_pool, workers=3)                  │
-        │  tiap halaman: cache? → skip : fetch → safe_write             │
+        │  pages 2..last in parallel (run_pool, workers=3)              │
+        │  each page: cached? → skip : fetch → safe_write               │
         └───────┬───────────────────────────────┬──────────────────────┘
-                │ domain                        │ infrastruktur
+                │ domain                        │ infrastructure
                 ▼                               ▼
   putusan3/domain/pagination_rules   infrastructure adapter implements ports
   - year_listing_url(year, page)     - Fetcher.get(): max_attempts ≤24, sticky
-  - parse_last_page (data-ci-…)      - fast-skip proxy mati (~≤20s/attempt)
+  - parse_last_page (data-ci-…)      - fast-skip dead proxies (~≤20s/attempt)
   - is_valid_listing                 - goto + wait_for_selector marker (10 s)
-  - pagination 499 = cap situs       - 200-invalid → dump diag/reject_200_last.html
-                                     - 429 → jeda 5–8 s; retire 2 gagal beruntun
+  - pagination 499 = site cap        - 200-invalid → dump diag/reject_200_last.html
+                                     - 429 → pause 5–8 s; retire after 2 consecutive failures
                                      ▼
                       putusan3/infrastructure/page_store
-                      - list_NNNN.html (atomik: .part → replace)
+                      - list_NNNN.html (atomic: .part → replace)
                       - manifest.jsonl (JSONL ts+meta)
                       - pagination.json
 ```
 
-### Kunci perilaku Fetcher (terverifikasi hidup 2026-10-25)
+### Key Fetcher behaviors (live-verified 2026-10-25)
 
-1. **Proxy mati → langsung skip** — `ERR_TIMED_OUT` dsb terdeteksi ~9 s; tidak ada perpanjangan waktu untuk membuktikan proxy mati. `finally:` selalu mengembalikan lease ke antrian kecuali proxy sudah direst.
-2. **Proxy lancar → sticky** — proxy yang lolos `validator` dipakai berulang (log `(sticky)`) sampai gagal/challenge; baru rotasi.
-3. **Watchdog keras** — `asyncio.wait_for(timeout + 18 s)` menjamin satu attempt tidak pernah menggantung lebih lama itu (goto 20 s + wait-sel 10 s + buffer).
-4. **200-tapi-invalid → dump** — body disimpan `out/diag/reject_200_last.html` untuk diagnosis (jangan menebak markup).
-5. **429 → jeda 5–8 s** sebelum rotasi; 403/503 = challenge `is_challenge` → skip cepat.
-6. **Pool habis → "No live proxies left"** naik ke service; konduktor menyiapkan pool baru lalu resume.
+1. **Dead proxy → skip immediately** — `ERR_TIMED_OUT` and the like are detected within ~9 s; there is no extra time spent proving a proxy is dead. `finally:` always returns the lease to the queue unless the proxy has already been retired.
+2. **Fast proxy → sticky** — a proxy that passes the `validator` is reused (log `(sticky)`) until it fails or hits a challenge; only then does rotation happen.
+3. **Hard watchdog** — `asyncio.wait_for(timeout + 18 s)` guarantees a single attempt never hangs longer than that (goto 20 s + selector wait 10 s + buffer).
+4. **200-but-invalid → dump** — the body is saved to `out/diag/reject_200_last.html` for diagnosis (never guess at markup).
+5. **429 → pause 5–8 s** before rotating; 403/503 = challenge `is_challenge` → fast skip.
+6. **Pool exhausted → "No live proxies left"** propagates up to the service; the conductor prepares a new pool and then resumes.
 
-## Alur legacy scraper proxy (masih hidup via shim)
+## Legacy proxy scraper flow (still alive via shims)
 
-`main.py` CLI (`test|test-all|continuous|list-proxies|save|load`) tetap bekerja: `ProxyPoolManager` → `fetch_all_proxies` (5 sumber httpx) → `validate_proxies` (anonymity/transparency/GeoIP-batch ≤100 IP/POST) → `get_best_proxies(ID, anonymous)` → `ProxyRotator` round-robin → `ProxyVisitor` (Playwright, context per proxy, stealth UA+locale id-ID+tz Jakarta) → `export_results` (RESULTS_PATH).
+The `main.py` CLI (`test|test-all|continuous|list-proxies|save|load`) still works: `ProxyPoolManager` → `fetch_all_proxies` (5 httpx sources) → `validate_proxies` (anonymity/transparency/batch GeoIP ≤100 IPs/POST) → `get_best_proxies(ID, anonymous)` → `ProxyRotator` round-robin → `ProxyVisitor` (Playwright, context per proxy, stealth UA+locale id-ID+tz Jakarta) → `export_results` (RESULTS_PATH).
 
-Detail penuh alur ini (seq startup/visit/retry) dipindahkan tanpa perubahan — lihat git history zip `backup/putusan3_code_backup_*.zip` bila perlu versi sebelum restrukturisasi.
+The full details of this flow (startup/visit/retry sequence) were moved unchanged — see the git-archived zip `backup/putusan3_code_backup_*.zip` if you need the pre-restructuring version.
 
-## Tipe Data Inti
+## Core Data Types
 
-| Tipe | Lokasi | Berisi |
+| Type | Location | Contents |
 |------|--------|--------|
-| `ProxyValidationResult` | `infrastructure/validator.py` | `is_working`, `latency_ms`, `is_anonymous`, `is_transparent`, `is_indonesian` (berdasar egress), `origin_ip` + `origin_country_code`, `proxy_country_code`, `error`, `response_headers` |
+| `ProxyValidationResult` | `infrastructure/validator.py` | `is_working`, `latency_ms`, `is_anonymous`, `is_transparent`, `is_indonesian` (based on egress), `origin_ip` + `origin_country_code`, `proxy_country_code`, `error`, `response_headers` |
 | `ProxyHealth` | `infrastructure/rotator.py` | `successes`, `failures`, `consecutive_failures`, `avg_latency_ms`, `is_retired`, `validation_result` |
 | `ScrapingResult` | `infrastructure/visitor.py` | `url`, `proxy`, `success`, `status_code`, `content`, `headers`, `cookies`, `latency_ms`, `error`, `timestamp` |
 
-## Keputusan Desain & Trade-off
+## Design Decisions & Trade-offs
 
-- **Logika satu sumber** — parser/URL/regex di `domain` dipakai engine, service, CLI, dan test; application orchestration memakai port alih-alih import adapter.
-- **Shim, bukan rewrite** — repo bukan git; shim re-export berisiko nol untuk semua konsumen lama (36+ test lama lulus tanpa perubahan).
-- **Browser-profile konstanta di domain** — `CHROME_UA`/`STEALTH_INIT_SCRIPT`/`VIEWPORTS`/`DIRECT_KEY` tidur di `pagination_rules` demi satu sumber kebenaran; hanya engine yang membaca. Trade-off pragmatis: domain harusnya pure, tapi verbatim > purity di titik ini.
-- **Konduktor siklus** — proxy gratis Indonesia umur pendek (lulus validasi → mati 3–15 menit), jadi satu pass hanya 15–30 halaman; siklus [harvest → refresh → merge → resume] otomatis menutup gap sampai 499 halaman. Setiap putaran isolat: browser baru, pool baru, exit bersih.
-- **499 = cap situs** — `last_page=499` dengan `capped_at_site_limit: true` adalah batas situs, **bukan** akhir sebenarnya (~9.980 putusan). Coverage penuh hanya via `--scope courts`.
-- **Resumable per file** — file valid (`is_usable` ≥5 KB + `is_valid_listing`) di-skip; file tak valid di-refetch; tulis atomik.
-- **Retirement rule (rotator)** — `consecutive_failures >= MAX_PROXY_FAILURES`; sukses mereset. Proksi flaky tidak langsung dipensiunkan.
-- **GeoIP dua dimensi** — `origin_country_code` (egress) dasar `is_indonesian`; `proxy_country_code` identitas proxy. Proxy transparan yang mengusak real-IP terdeteksi.
-- **Validasi ≠ browsing** — httpx prefilter tidak menggantikan Chromium untuk situs ber-Cloudflare; jangan pernah memfilter pool terhadap target 403 dengan HTTP client murni.
+- **Single source of logic** — the parsers/URL builders/regex in `domain` are used by the engine, services, CLIs, and tests; the application orchestration depends on ports instead of importing adapters.
+- **Shims, not a rewrite** — the repo is not a git repository; re-export shims carry zero risk for all legacy consumers (36+ legacy tests pass unchanged).
+- **Browser-profile constants in domain** — `CHROME_UA`/`STEALTH_INIT_SCRIPT`/`VIEWPORTS`/`DIRECT_KEY` sleep in `pagination_rules` in the name of a single source of truth; only the engine reads them. A pragmatic trade-off: domain should be pure, but verbatim > purity at this point.
+- **Conductor cycle** — free Indonesian proxies are short-lived (pass validation → die within 3–15 minutes), so a single pass yields only 15–30 pages; the [harvest → refresh → merge → resume] cycle automatically closes the gap up to 499 pages. Each round is isolated: fresh browser, fresh pool, clean exit.
+- **499 = site cap** — `last_page=499` with `capped_at_site_limit: true` is the site's limit, **not** the real end (~9,980 rulings). Full coverage is only achievable via `--scope courts`.
+- **Resumable per file** — valid files (`is_usable` ≥5 KB + `is_valid_listing`) are skipped; invalid files are refetched; writes are atomic.
+- **Retirement rule (rotator)** — `consecutive_failures >= MAX_PROXY_FAILURES`; a success resets the counter. Flaky proxies are not retired immediately.
+- **Two-dimensional GeoIP** — `origin_country_code` (egress) drives `is_indonesian`; `proxy_country_code` is the proxy's own identity. Transparent proxies that leak the real IP are caught this way.
+- **Validation ≠ browsing** — an httpx prefilter does not replace Chromium for Cloudflare-protected sites; never gate a pool against a 403 target with a plain HTTP client.
 
 ## Extension Points
 
-- **Parser baru / markup berubah** — edit `putusan3/domain/pagination_rules.py` saja; test parser offline di `tests/test_harvest.py`.
-- **Use-case baru (tahap 2: parse detail → CSV)** — tambah service di `application/`, pakai `Fetcher` + `run_pool` + `page_store`; expose via `presentation/cli.py` (`python -m putusan3 <cmd>`).
-- **Sumber proxy baru** — subclass `ProxySource` di `infrastructure/sources.py`, daftar di `create_sources()`.
-- **GeoIP lokal** — ganti `_lookup_countries()` di `infrastructure/validator.py` (MaxMind mmdb).
-- **Strategi rotasi** — `get_proxy(strategy=)` dan kini juga `ProxyVisitor.visit(strategy=)` mendukung round_robin/random/best_latency.
+- **New parser / markup change** — edit `putusan3/domain/pagination_rules.py` only; offline parser tests live in `tests/test_harvest.py`.
+- **New use case (stage 2: parse details → CSV)** — add a service in `application/`, use `Fetcher` + `run_pool` + `page_store`; expose it via `presentation/cli.py` (`python -m putusan3 <cmd>`).
+- **New proxy source** — subclass `ProxySource` in `infrastructure/sources.py`, register in
+  `create_sources()`; add the URL to `config._DEFAULT_PROXY_SOURCES` (default: 4 lists —
+  proxyscrape, proxy-list.download, 2× GitHub raw; GeoNode/FreeProxyListNet classes ship but
+  are only active when their URL is configured, e.g. via `PROXY_SOURCES`).
+- **Local GeoIP** — replace `_lookup_countries()` in `infrastructure/validator.py` (MaxMind mmdb).
+- **Rotation strategy** — `get_proxy(strategy=)` and now also `ProxyVisitor.visit(strategy=)` support round_robin/random/best_latency.

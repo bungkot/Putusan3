@@ -47,12 +47,12 @@
   ],
   "agents": {
     "explorer": {
-      "model": "opencode/nemotron-3-ultra-free",
+      "model": "opencode/nemotron-3.5-super-vl-free",
       "description": "Fast codebase exploration: find files, search patterns, understand structure",
       "tools": ["glob", "grep", "read", "edit"]
     },
     "implementer": {
-      "model": "opencode/nemotron-3-ultra-free",
+      "model": "opencode/nemotron-3.5-super-vl-free",
       "description": "Implements features: proxy fetching, validation, rotation, Playwright visitor logic",
       "tools": ["write", "edit", "shell", "read"],
       "instructions": [
@@ -63,7 +63,7 @@
       ]
     },
     "tester": {
-      "model": "opencode/nemotron-3-ultra-free",
+      "model": "opencode/nemotron-3.5-super-vl-free",
       "description": "Writes and runs tests: unit tests for proxy logic, integration tests for scraper",
       "tools": ["write", "edit", "shell", "read"],
       "instructions": [
@@ -74,7 +74,7 @@
       ]
     },
     "debugger": {
-      "model": "opencode/nemotron-3-ultra-free",
+      "model": "opencode/nemotron-3.5-super-vl-free",
       "description": "Diagnoses issues: proxy failures, Playwright timeouts, SSL errors, IP leakage",
       "tools": ["shell", "read", "edit", "grep"],
       "instructions": [
@@ -118,8 +118,8 @@
       "agent": "tester"
     },
     "fast-test": {
-      "description": "Scrape using the saved pool snapshot — no network refresh (instant)",
-      "command": "PROXY_LOAD_PATH=data/pools/proxy_pool.txt RESULTS_PATH=results.json python main.py test-all",
+      "description": "Scrape using the saved pool snapshot — no network refresh (instant, PowerShell syntax)",
+      "command": "$env:PROXY_LOAD_PATH='data/pools/proxy_pool.txt'; $env:RESULTS_PATH='results.json'; python main.py test-all",
       "agent": "tester"
     },
     "dev": {
@@ -132,10 +132,20 @@
       "command": "pytest tests/ -v",
       "agent": "tester"
     },
+    "integration-test": {
+      "description": "Run the optional live-network integration tests (Chromium + proxy validation)",
+      "command": "pytest -m integration -q",
+      "agent": "tester"
+    },
     "lint": {
-      "description": "Lint and type check",
-      "command": "ruff check . && mypy putusan3",
+      "description": "Lint and type check (python -m: reliable on Windows where ruff/mypy are not on PATH)",
+      "command": "python -m ruff check .; python -m mypy putusan3",
       "agent": "implementer"
+    },
+    "harvest-parse": {
+      "description": "Offline parse of the 2026 harvest pages -> CSV/txt/jsonl inventory (no network)",
+      "command": "python -m putusan3 harvest --year 2026 --parse-only",
+      "agent": "tester"
     },
     "proxy-test": {
       "description": "Test proxy fetching and validation",

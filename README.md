@@ -1,4 +1,23 @@
-# Putusan3 HARVEST — Indonesian Proxy Toolkit + Mahkamah Agung Harvester
+# Indonesian Proxy Toolkit & Supreme Court Data Harvester
+
+> ⚠️ **DISCLAIMER — EDUCATION & LEARNING ONLY**
+>
+> This project was built **strictly for learning, research, and educational
+> purposes** — to understand data-harvesting techniques, proxy rotation,
+> Cloudflare, and Playwright. This code is **not intended to damage systems or
+> to be abused** in any way:
+>
+> - Do **not** use it for attacks, abuse, DoS/DDoS, credential/data theft, or
+>   any form of sabotage against any website or system.
+> - Scrape politely: respect rate limits, use random delays, don't rampage,
+>   and keep the target site healthy and online.
+> - Comply with applicable law (in Indonesia: the ITE Law and Supreme Court
+>   regulations), website terms of service, `robots.txt`, and good research
+>   ethics.
+> - **Written permission is required**: before targeting someone else's
+>   system, data collection must be backed by **written permission or consent**
+>   from the system's owner/operator. Acting without permission is entirely at
+>   your own risk.
 
 Python + Playwright toolkit with two layers:
 
@@ -17,10 +36,9 @@ Everything the tools *produce* stays out of your face: **all results, pools and
 logs live in dedicated directories** (`data/`, `logs/`, `diagnostics/`) — the repo
 root stays clean with only code + config.
 
-> Full internals, data flow, and design notes:
-> [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · operational runbook:
-> [docs/WORKFLOW.md](docs/WORKFLOW.md) · current verified state:
-> [docs/STATE.md](docs/STATE.md)
+> [MIT License](LICENSE) © 2026 Hendra Dwi Saputra — see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full internals,
+> [docs/WORKFLOW.md](docs/WORKFLOW.md) for the operational runbook, and
+> [docs/STATE.md](docs/STATE.md) for the current verified state.
 
 ## Features
 
@@ -324,7 +342,7 @@ ruff check .
 mypy putusan3
 ```
 
-The default test run (91 tests) excludes the 8 `integration`-marked tests; use
+The default test run (100 tests) excludes the 8 `integration`-marked tests; use
 `pytest tests/ -m integration -q` when live-network checks (Chromium launch,
 proxy validation) are desired. They are not part of the deterministic local QA
 run. A 3.4k-proxy refresh is normal — expect <5% of fetched proxies to survive
@@ -346,12 +364,5 @@ Indonesian + anonymous validation.
 - **CSV rows with empty `url_pdf`/`url_zip`** — that decision's detail page has
   not been fetched yet (or genuinely has no download link); rerun stage-2, then
   `--parse-only`.
-
-## Disclaimer
-
-Free proxies are unreliable and inherit their operators' trust level — never send
-sensitive data through them. Court decisions harvested here are public documents;
-still respect the target's rate limits and terms (the engine delays randomly
-between requests by design).
 
 MIT License.

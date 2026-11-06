@@ -22,7 +22,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
 import putusan3.presentation.harvest_cli as harvest_cli  # noqa: E402 (phase-orch tests)
+import putusan3.presentation.legacy_cli as legacy_cli  # noqa: E402
 from putusan3.application import conductor_service, harvest_pages_service
+from putusan3.application.async_tasks import run_bounded
 from putusan3.application.harvest_pages_service import (  # noqa: E402
     PagesRun,
     build_parser,
@@ -31,6 +33,7 @@ from putusan3.application.harvest_service import Harvest
 from putusan3.config import Config
 from putusan3.domain import pagination_rules as pr  # noqa: E402
 from putusan3.infrastructure import page_store as ps  # noqa: E402
+from putusan3.infrastructure.factories import SubprocessCommandRunner
 from putusan3.infrastructure.page_store import LocalPageStore
 from putusan3.infrastructure.playwright_engine import Fetcher
 from putusan3.infrastructure.pool_loader import FilePoolLoader
@@ -727,6 +730,76 @@ def test_conductor_uses_injected_runner_and_absolute_refresh_path(tmp_path, monk
     assert refresh_target.parent == tmp_path / "data" / "pools"
     assert "8.8.8.8:8080" in (tmp_path / "data" / "pools" / "main.txt").read_text(
         encoding="utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Untouched-module regressions (QA harness audit 2026-11-07):
+# run_bounded / SubprocessCommandRunner / legacy_cli had zero direct tests.
+# ---------------------------------------------------------------------------
+
+def test_run_bounded_processes_every_item():
+    """run_bounded must feed all queued items to the job (worker pool > 1)."""
+    seen: list[int] = []
+
+    async def job(item: int) -> None:
+        seen.append(item)
+
+    asyncio.run(run_bounded(range(25), job, 4))
+    assert sorted(seen) == list(range(25))
+
+
+def test_run_bounded_swallows_job_failures(caplog):
+    """A failing job must not cancel the remaining queue or raise."""
+    seen: list[int] = []
+
+    async def job(item: int) -> None:
+        if item == 1:
+            raise RuntimeError("boom")
+        seen.append(item)
+
+    asyncio.run(run_bounded([0, 1, 2, 3], job, 2))
+    assert seen == [0, 2, 3]
+    assert any("boom" in rec.getMessage() or rec.exc_info for rec in caplog.records)
+
+
+def test_run_bounded_floor_workers_to_one():
+    """workers < 1 must still execute the queue (gather of ≥1 worker)."""
+    seen: list[int] = []
+
+    async def job(item: int) -> None:
+        seen.append(item)
+
+    asyncio.run(run_bounded(["a"], job, 0))
+    assert seen == ["a"]
+
+
+def test_subprocess_command_runner_returns_exit_code(tmp_path):
+    """The process adapter maps subprocess.call verbatim (0 on success)."""
+    runner = SubprocessCommandRunner()
+    rc = runner.run(
+        [sys.executable, "-c", "print(1)"],
+        cwd=tmp_path,
+    )
+    assert rc == 0
+    rc_fail = runner.run(
+        [sys.executable, "-c", "raise SystemExit(3)"],
+        cwd=tmp_path,
+    )
+    assert rc_fail == 3
+
+
+def test_legacy_cli_load_command_offline(tmp_path, capsys, monkeypatch):
+    """`python main.py load FILE` fills the pool from text with no network."""
+    pool_file = tmp_path / "pool.txt"
+    pool_file.write_text("# header\n8.8.8.8:8080\n1.2.3.4:9090\n", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["main.py", "load", str(pool_file)])
+    monkeypatch.delenv("PROXY_SAVE_PATH", raising=False)
+
+    exit_code = asyncio.run(legacy_cli.main())
+
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Loaded 2 proxies from" in out
 
 
 if __name__ == "__main__":

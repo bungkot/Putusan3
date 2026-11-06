@@ -6,6 +6,9 @@ build-backend = "setuptools.build_meta"
 name = "putusan3"
 version = "3.0.0"
 description = "Indonesian proxy rotator + putusan3.mahkamahagung.go.id harvester (Playwright, Cloudflare-aware)"
+license = { file = "LICENSE" }
+authors = [{ name = "Hendra Dwi Saputra" }]
+readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
     "playwright>=1.40.0",
