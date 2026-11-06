@@ -857,5 +857,24 @@ def test_initialize_pool_ops_do_not_launch_browser(tmp_path, monkeypatch):
     asyncio.run(app.cleanup())
 
 
+def test_access_probe_parser_watchdog_defaults():
+    """scripts/putusan3_access.py: `--watchdog 0` means AUTO per-attempt limit.
+
+    CI regression: a wedged proxy could stall the attempt loop indefinitely
+    (slow fallback goto + timeout-less screenshot) — the watchdog now bounds
+    every attempt and the loop advances to the next candidate IP.
+    """
+    import putusan3_access as access_probe  # noqa: PLC0415 (scripts/ on sys.path)
+
+    assert access_probe.__version__ == "1.1.0"
+    args = access_probe.build_parser().parse_args(["--pool", "p.txt"])
+    assert args.watchdog == 0          # auto: 2 x timeout + 18 s
+    assert args.timeout == 55_000
+
+    args2 = access_probe.build_parser().parse_args(
+        ["--pool", "p.txt", "--watchdog", "30"])
+    assert args2.watchdog == 30        # explicit override wins
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

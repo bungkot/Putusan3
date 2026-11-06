@@ -22,6 +22,11 @@ The first proxy that returns a healthy page wins:
   * (optional) rendered HTML snapshot to `--html`
   * (optional) JSON result record to `--json`
 
+Every attempt is bounded by a wall-clock watchdog (`--watchdog`, default
+auto: 2 x navigation timeout + 18 s): a proxy that wedges the browser is
+force-cancelled and the next candidate IP is tried, so the run always
+terminates instead of freezing on one dead IP.
+
 The target is Cloudflare-protected — raw HTTP clients receive a 403
 challenge, so this tool never "prefilters" proxies with requests; the
 browser itself is the validator.
@@ -57,8 +62,11 @@ from playwright.async_api import (
     Response,
     async_playwright,
 )
+from playwright.async_api import (
+    TimeoutError as PWTimeoutError,
+)
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 LOG = logging.getLogger("putusan3_access")
 
@@ -112,6 +120,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Maximum number of proxies to try from the pool")
     p.add_argument("--timeout", type=int, default=55_000,
                    help="Navigation timeout in milliseconds")
+    p.add_argument("--watchdog", type=float, default=0, metavar="SECONDS",
+                   help="Hard wall-clock limit per attempt (0 = auto: 2 x timeout + 18 s). "
+                        "A hung proxy is force-cancelled and the NEXT candidate IP is tried.")
     p.add_argument("--min-body", type=int, default=500,
                    help="Minimum rendered HTML length to accept a success")
     p.add_argument("--expect-text", default=None, metavar="TEXT",
@@ -207,11 +218,15 @@ async def attempt(
         page.set_default_navigation_timeout(timeout_ms)
 
         # networkidle first (best representation of "page loaded well"),
-        # domcontentloaded as the fallback for noisy/free-proxy pages.
+        # domcontentloaded as the fallback ONLY for genuinely slow-loading
+        # pages. Any other goto exception (proxy connect refused/hang →
+        # ERR_PROXY_CONNECTION_FAILED, ERR_TUNNEL_CONNECTION_FAILED, ...)
+        # goes straight to the error record: retrying goto against a dead
+        # proxy would just double the wall clock.
         response: Response | None
         try:
             response = await page.goto(url, wait_until="networkidle", timeout=timeout_ms - 5_000)
-        except Exception:
+        except PWTimeoutError:
             response = await page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
 
         latency_ms = (time.time() - start) * 1000
@@ -233,7 +248,7 @@ async def attempt(
 
         # Success — persist the evidence first, then report.
         screenshot.parent.mkdir(parents=True, exist_ok=True)
-        await page.screenshot(path=str(screenshot), full_page=True)
+        await page.screenshot(path=str(screenshot), full_page=True, timeout=timeout_ms)
         record["screenshot"] = str(screenshot)
         if html_out:
             html_out.write_text(content, encoding="utf-8")
@@ -275,9 +290,19 @@ async def run(args: argparse.Namespace) -> int:
         return 1
     proxies = proxies[: args.attempts]
 
+    # Hard per-attempt wall clock. Navigation/goto already carry their own
+    # timeouts, but a wedged proxy can stall even non-navigation calls
+    # (context work, renderer plugins, screenshot) — this watchdog guarantees
+    # every attempt terminates and the loop advances to the next candidate.
+    watchdog_s = (
+        args.watchdog if args.watchdog and args.watchdog > 0
+        else (2 * args.timeout + 18_000) / 1000.0
+    )
+
     LOG.info(
-        "Access test: %s  (ua=Chrome, headless=%s, channel=%s, attempts=%d)",
-        args.url, not args.headed, args.channel or "chromium-bundled", len(proxies),
+        "Access test: %s  (ua=Chrome, headless=%s, channel=%s, attempts=%d, watchdog=%.0fs)",
+        args.url, not args.headed, args.channel or "chromium-bundled",
+        len(proxies), watchdog_s,
     )
     print()
     print("=" * 72)
@@ -288,18 +313,33 @@ async def run(args: argparse.Namespace) -> int:
     async with async_playwright() as pw:
         for idx, proxy in enumerate(proxies, 1):
             print(f"  [{idx}/{len(proxies)}] {proxy} ...", flush=True)
-            record = await attempt(
-                pw,
-                proxy,
-                args.url,
-                headed=args.headed,
-                channel=args.channel,
-                timeout_ms=args.timeout,
-                min_body=args.min_body,
-                expect_text=args.expect_text,
-                screenshot=screenshot_path,
-                html_out=html_path,
-            )
+            try:
+                record = await asyncio.wait_for(
+                    attempt(
+                        pw,
+                        proxy,
+                        args.url,
+                        headed=args.headed,
+                        channel=args.channel,
+                        timeout_ms=args.timeout,
+                        min_body=args.min_body,
+                        expect_text=args.expect_text,
+                        screenshot=screenshot_path,
+                        html_out=html_path,
+                    ),
+                    timeout=watchdog_s,
+                )
+            except asyncio.TimeoutError:
+                # The attempt coroutine is cancelled above — its finally
+                # block closes page/context/browser; we simply move on.
+                record = {
+                    "proxy": proxy,
+                    "ok": False,
+                    "url": args.url,
+                    "error": (f"attempt watchdog: exceeded {watchdog_s:.0f}s "
+                              "(proxy hung — cancelled, next candidate)"),
+                    "latency_ms": watchdog_s * 1000,
+                }
             all_attempts.append(record)
 
             if record["ok"]:
