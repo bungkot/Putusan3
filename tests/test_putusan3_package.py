@@ -30,7 +30,6 @@ from putusan3.application.harvest_pages_service import (  # noqa: E402
     build_parser,
 )
 from putusan3.application.harvest_service import Harvest
-from putusan3.config import Config
 from putusan3.domain import pagination_rules as pr  # noqa: E402
 from putusan3.infrastructure import page_store as ps  # noqa: E402
 from putusan3.infrastructure.factories import SubprocessCommandRunner
@@ -567,8 +566,13 @@ def test_details_only_actually_fetches_details(monkeypatch, tmp_path):
         lambda: type("F", (), {"open": staticmethod(
             lambda pool, *, options, diagnostic_directory=None: _FakeCM(fetcher))})())
 
+    # CI has no data/pools/proxy_pool.txt (gitignored) — always pass an
+    # explicit pool so the run doesn't bail out before the fake fetcher.
+    pool_file = tmp_path / "pool.txt"
+    pool_file.write_text("# fake\n203.0.113.7:8080\n", encoding="utf-8")
     args = harvest_cli.build_parser().parse_args(
-        ["--year", "2022", "--out-dir", str(tmp_path), "--details-only"])
+        ["--year", "2022", "--out-dir", str(tmp_path), "--details-only",
+         "--pool", str(pool_file)])
     rc = asyncio.run(harvest_cli.run(args))
 
     assert rc == 3                      # empty parse, but fetch happened
@@ -584,8 +588,11 @@ def test_listing_only_skips_detail_phase(monkeypatch, tmp_path):
         lambda: type("F", (), {"open": staticmethod(
             lambda pool, *, options, diagnostic_directory=None: _FakeCM(object()))})())
 
+    pool_file = tmp_path / "pool.txt"
+    pool_file.write_text("# fake\n203.0.113.7:8080\n", encoding="utf-8")
     args = harvest_cli.build_parser().parse_args(
-        ["--year", "2022", "--out-dir", str(tmp_path), "--listing-only"])
+        ["--year", "2022", "--out-dir", str(tmp_path), "--listing-only",
+         "--pool", str(pool_file)])
     asyncio.run(harvest_cli.run(args))
 
     assert calls["year_scope"] == 1     # listing still fetched
@@ -640,9 +647,31 @@ def test_config_source_fetch_timeout_defaults_to_validation_timeout(monkeypatch)
     # Backlog closed: the proxy-source fetch no longer borrows VALIDATION_TIMEOUT
     # implicitly; SOURCE_FETCH_TIMEOUT (seconds) defaults to that same value but
     # can be tuned independently.
-    monkeypatch.delenv("SOURCE_FETCH_TIMEOUT", raising=False)
-    assert Config.SOURCE_FETCH_TIMEOUT == Config.VALIDATION_TIMEOUT / 1000.0
-    assert Config.SOURCE_FETCH_TIMEOUT > 0
+    #
+    # Config freezes os.environ at import time, and CI exports
+    # SOURCE_FETCH_TIMEOUT explicitly — values already read at collection.
+    # So simulate fresh imports under controlled env instead of trusting
+    # the ambient module state.
+    import importlib
+
+    from putusan3 import config as _config_module
+    try:
+        with monkeypatch.context() as ctx:
+            # Fresh import without SOURCE_FETCH_TIMEOUT → falls back to
+            # VALIDATION_TIMEOUT/ms → seconds.
+            ctx.delenv("SOURCE_FETCH_TIMEOUT", raising=False)
+            fresh = importlib.reload(_config_module)
+            assert (fresh.Config.SOURCE_FETCH_TIMEOUT
+                    == fresh.Config.VALIDATION_TIMEOUT / 1000.0)
+            assert fresh.Config.SOURCE_FETCH_TIMEOUT > 0
+            # Explicitly set → tuned independently of VALIDATION_TIMEOUT.
+            ctx.setenv("SOURCE_FETCH_TIMEOUT", "7.5")
+            fresh = importlib.reload(_config_module)
+            assert fresh.Config.SOURCE_FETCH_TIMEOUT == 7.5
+    finally:
+        # Env is restored; re-evaluate the module one last time so it is
+        # frozen again for the ambient environment (real env, .env, CI).
+        importlib.reload(_config_module)
 
 
 def test_application_layer_does_not_import_infrastructure():
